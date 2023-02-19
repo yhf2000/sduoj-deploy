@@ -1,0 +1,84 @@
+version: "2.3"
+networks:
+  network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: ${SUBNET}
+services:
+  # 中间件
+  mysql:
+    container_name: "${COMPOSE_PROJECT_NAME}_mysql" # disable scalability
+    image: mysql:8
+    networks:
+      - network
+    ports:
+      - "3306:3306"
+    env_file:
+      - ../env/mysql.env
+    cap_add:
+      - SYS_NICE  # solve the 'mbind: Operation not permitted' error
+    volumes:
+      - ../env/mysql-conf.d:/etc/mysql/conf.d
+      - ../env/mysql-initdb.d:/docker-entrypoint-initdb.d
+      - ./mysql/data:/var/lib/mysql
+      - ./mysql/files:/var/lib/mysql-files
+    restart: on-failure
+  redis:
+    container_name: "${COMPOSE_PROJECT_NAME}_redis"
+    image: redis:alpine
+    networks:
+      - network
+    ports:
+      - "6379:6379"
+    restart: on-failure
+  rabbit:
+    container_name: "${COMPOSE_PROJECT_NAME}_rabbit"
+    image: rabbitmq:management
+    env_file:
+      - ../env/rabbitmq.env
+    networks:
+      - network
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    restart: on-failure
+  nacos:
+    container_name: "${COMPOSE_PROJECT_NAME}_nacos"
+    build:
+      context: ../build/sduoj-nacos/2.1.2
+    networks:
+      - network
+    env_file:
+      - ../env/nacos.env
+    volumes:
+      - ./nacos-logs/:/home/nacos/logs
+    ports:
+      - "${NACOS_PORT8848}:8848"
+      - "${NACOS_PORT9848}:9848"
+      - "${NACOS_PORT9849}:9849"
+    links:
+      - "mysql:sduoj-mysql"
+    environment:
+      WAIT_HOSTS: sduoj-mysql:3306
+    restart: on-failure
+  # 评测机
+  judger:
+    image: registry.cn-beijing.aliyuncs.com/pre-sduoj/sduoj-judger
+    networks:
+      - network
+    links:
+      - "nacos:sduoj-nacos"
+      - "rabbit:sduoj-rabbit"
+    volumes:
+      - ./sduoj-judger.log:/sduoj/sduoj.log
+#      - ./sduoj-judger.jar:/sduoj/sduoj-judger.jar
+    pids_limit: 1024
+    mem_limit: 1536M
+    cpuset: "0"
+    environment:
+      WAIT_HOSTS: sduoj-nacos:8848, sduoj-rabbit:5672
+      NACOS_ADDR: sduoj-nacos:8848
+      ACTIVE: dev
+    restart: on-failure
